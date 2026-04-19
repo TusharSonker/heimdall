@@ -1,0 +1,33 @@
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+}
+.title {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 0.75rem;
+}
+.log {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.empty { font-family: var(--mono); font-size: 0.68rem; color: var(--muted); }
+.entry {
+  display: flex;
+  gap: 0.75rem;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+.ts { color: var(--accent2); flex-shrink: 0; }
+.success .msg { color: var(--accent); }
+.warn    .msg { color: var(--warn); }
+.error   .msg { color: var(--danger); }
