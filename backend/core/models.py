@@ -11,11 +11,15 @@ The encrypted linear inference formula:
 This works because Paillier supports:
     E(a) * scalar  =  E(scalar * a)
     E(a) + E(b)    =  E(a + b)
+
+encrypted_linear_inference_raw bypasses phe's base-16 encoding so that
+JS-generated ciphertexts (which use base-10 scaling of 1e6) produce the
+correct score when the client decrypts with base-10 exponent arithmetic.
 """
 
 import json
 import math
-import os
+import secrets
 from pathlib import Path
 import phe as paillier
 from .encryption import reconstruct_encrypted_number
@@ -92,8 +96,11 @@ def _load_weights() -> dict:
             data = json.load(f)
         print(f"[Heimdall] Loaded TRAINED weights from {_WEIGHTS_FILE}")
         for model_id, w in data.items():
-            if model_id in MODEL_SPECS and "metrics" in w:
-                MODEL_SPECS[model_id]["accuracy"] = round(w["metrics"]["accuracy"] * 100, 1)
+            if model_id in MODEL_SPECS:
+                if "metrics" in w:
+                    MODEL_SPECS[model_id]["accuracy"] = round(w["metrics"]["accuracy"] * 100, 1)
+                if "threshold" in w:
+                    MODEL_SPECS[model_id]["threshold"] = w["threshold"]
         return data
     else:
         print("[Heimdall] WARNING: trained_weights.json not found. Using placeholder weights.")
@@ -138,6 +145,72 @@ def encrypted_linear_inference(
     result = result + bias
 
     return {"ciphertext": str(result.ciphertext()), "exponent": result.exponent}
+
+
+# ── Raw Paillier inference (JS-compatible) ─────────────────────────────────
+
+# JS scales each normalised feature by FEATURE_SCALE before encrypting.
+# The server scales each weight by WEIGHT_SCALE (integer approximation).
+# Final ciphertext decrypts to  (Σ w_i*x_i + b) * TOTAL_SCALE  in BigInt,
+# and the returned exponent tells the JS client to divide by TOTAL_SCALE.
+_FEATURE_SCALE = 1_000_000   # must match crypto.js encryptValue (1e6)
+_WEIGHT_SCALE  = 1_000_000   # precision for weight quantisation
+_TOTAL_SCALE   = _FEATURE_SCALE * _WEIGHT_SCALE          # 1e12
+_RESULT_EXPONENT = -(int(math.log10(_FEATURE_SCALE))
+                     + int(math.log10(_WEIGHT_SCALE)))   # -12
+
+
+def encrypted_linear_inference_raw(
+    public_key: paillier.PaillierPublicKey,
+    encrypted_features: list,
+    model_id: str,
+) -> dict:
+    """
+    Encrypted dot-product for JS-generated Paillier ciphertexts.
+
+    JS encrypts:  m_i = round(x_i * _FEATURE_SCALE)  with exponent -6.
+    Server computes (purely in raw Paillier arithmetic — no phe encoding):
+        E(Σ round(w_i*_WEIGHT_SCALE)*m_i  +  round(b*_TOTAL_SCALE))
+    which decrypts to  (Σ w_i*x_i + b) * _TOTAL_SCALE  ≈ score * 1e12.
+
+    Client divides the BigInt result by 10^12 to recover the score.
+    Correctness: bypasses phe's base-16 encoding that would cause a ~16×
+    magnitude error if mixed with the JS client's base-10 convention.
+    """
+    w        = TRAINED_WEIGHTS[model_id]
+    weights  = w["weights"]
+    bias     = w["bias"]
+
+    n  = public_key.n
+    n2 = n * n
+
+    int_weights = [round(wi * _WEIGHT_SCALE) for wi in weights]
+    int_bias    = round(bias * _TOTAL_SCALE)
+
+    # Initialise accumulator with E(0) using a fresh random nonce
+    r0 = secrets.randbelow(n) or 1
+    result_c = pow(r0, n, n2)   # E(0, r0)
+
+    # Accumulate E(Σ int_w_i * m_i) via raw Paillier scalar multiplication:
+    #   E(m)^k  mod n²  =  E(k·m)          k > 0
+    #   pow(c, k, n²) with k < 0 uses Python's modular inverse → E(-|k|·m)
+    for ef, iw in zip(encrypted_features, int_weights):
+        if iw == 0:
+            continue
+        c_i    = int(ef["ciphertext"])
+        term_c = pow(c_i, iw, n2)          # handles negative iw via mod-inverse
+        result_c = result_c * term_c % n2
+
+    # Add bias:  g = n+1  →  g^m mod n² = (1 + m·n) mod n²  (binomial theorem)
+    int_bias_mod = int_bias % n            # maps negatives into Z_n
+    enc_bias     = (1 + int_bias_mod * n) % n2
+    result_c     = result_c * enc_bias % n2
+
+    # Re-randomise for semantic security
+    r = secrets.randbelow(n) or 1
+    result_c = result_c * pow(r, n, n2) % n2
+
+    return {"ciphertext": str(result_c), "exponent": _RESULT_EXPONENT}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
