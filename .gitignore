@@ -24,3 +24,36 @@ Thumbs.db
 
 # Docker
 .docker/
+
+# Stray npm lockfile in Python backend
+backend/package-lock.json
+
+# Generated benchmark outputs — regenerate with scripts/benchmark_ieee.py
+backend/results/
+
+# Paper (local only — not published to repo)
+paper/
+
+# Local agent/tool state
+.claude/
+
+# LaTeX build artifacts
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.bbl
+paper/*.blg
+paper/*.toc
+paper/*.synctex.gz
+paper/*.fdb_latexmk
+paper/*.fls
+paper/*.nav
+paper/*.snm
+paper/*.vrb
+paper/*.pdf
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
