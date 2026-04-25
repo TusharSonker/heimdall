@@ -5,15 +5,15 @@ import ResultPanel from '../components/ResultPanel';
 import MetricsBar from '../components/MetricsBar';
 import AuditLog from '../components/AuditLog';
 import { usePaillier } from '../hooks/usePaillier';
-import { fetchModels, predictPlaintext } from '../utils/api';
+import { fetchModels, predict } from '../utils/api';
 import styles from './DiagnosisPage.module.css';
 
 const INITIAL_STEPS = {
-  validate: { status: '', detail: 'Waiting for input...', time: null },
+  validate:  { status: '', detail: 'Waiting for input...', time: null },
   normalize: { status: '', detail: 'Awaiting step 1...', time: null },
-  encrypt: { status: '', detail: 'Awaiting step 2...', time: null },
-  infer: { status: '', detail: 'Awaiting step 3...', time: null },
-  decrypt: { status: '', detail: 'Awaiting step 4...', time: null },
+  encrypt:   { status: '', detail: 'Awaiting step 2...', time: null },
+  infer:     { status: '', detail: 'Awaiting step 3...', time: null },
+  decrypt:   { status: '', detail: 'Awaiting step 4...', time: null },
 };
 
 function now() {
@@ -21,14 +21,14 @@ function now() {
 }
 
 export default function DiagnosisPage() {
-  const [models, setModels] = useState({});
+  const [models, setModels]           = useState({});
   const [activeModel, setActiveModel] = useState('diabetes');
   const [fieldValues, setFieldValues] = useState({});
-  const [steps, setSteps] = useState(INITIAL_STEPS);
-  const [result, setResult] = useState(null);
-  const [metrics, setMetrics] = useState({ keyBits: 2048 });
-  const [log, setLog] = useState([]);
-  const [running, setRunning] = useState(false);
+  const [steps, setSteps]             = useState(INITIAL_STEPS);
+  const [result, setResult]           = useState(null);
+  const [metrics, setMetrics]         = useState({ keyBits: 2048 });
+  const [log, setLog]                 = useState([]);
+  const [running, setRunning]         = useState(false);
   const [serverOnline, setServerOnline] = useState(null);
 
   const { keyState, genKeys, encryptFeatures, decryptAndInterpret } = usePaillier();
@@ -40,10 +40,15 @@ export default function DiagnosisPage() {
   const setStep = useCallback((id, status, detail, time) => {
     setSteps(prev => ({
       ...prev,
-      [id]: { status, detail: detail ?? prev[id].detail, time: time ?? prev[id].time },
+      [id]: {
+        status,
+        detail: detail ?? prev[id].detail,
+        time:   time   ?? prev[id].time,
+      },
     }));
   }, []);
 
+  // Connect to API and generate keys on mount
   useEffect(() => {
     fetchModels()
       .then(data => {
@@ -53,12 +58,27 @@ export default function DiagnosisPage() {
       })
       .catch(() => {
         setServerOnline(false);
-        addLog('API server offline — start the backend (uvicorn)', 'error');
+        addLog('API server offline — run: uvicorn api.main:app --reload', 'error');
       });
   }, [addLog]);
 
+  // Generate keys once the server is confirmed online
+  useEffect(() => {
+    if (serverOnline === true && !keyState.generated && !keyState.generating) {
+      addLog('Generating 2048-bit Paillier keypair in browser...', '');
+      genKeys()
+        .then(({ publicKeyN }) => {
+          addLog(
+            `Keypair ready — public key n: 0x${BigInt(publicKeyN).toString(16).slice(0, 16)}...`,
+            'success'
+          );
+        })
+        .catch(err => addLog('Key generation failed: ' + err.message, 'error'));
+    }
+  }, [serverOnline, keyState.generated, keyState.generating, genKeys, addLog]);
+
   const currentModel = models[activeModel];
-  const features = currentModel?.features || [];
+  const features     = currentModel?.features || [];
 
   function handleFieldChange(id, value) {
     setFieldValues(prev => ({ ...prev, [id]: value }));
@@ -71,9 +91,10 @@ export default function DiagnosisPage() {
   async function runPipeline() {
     if (running) return;
     if (!serverOnline) { addLog('API server is offline', 'error'); return; }
+    if (!keyState.generated) { addLog('Keys not yet ready — please wait', 'error'); return; }
 
     const rawValues = features.map(f => parseFloat(fieldValues[f.id] ?? ''));
-    const invalid = features.filter((f, i) => isNaN(rawValues[i]));
+    const invalid   = features.filter((_, i) => isNaN(rawValues[i]));
     if (invalid.length > 0) {
       addLog(`Missing fields: ${invalid.map(f => f.label).join(', ')}`, 'error');
       return;
@@ -83,72 +104,71 @@ export default function DiagnosisPage() {
     setResult(null);
     setSteps(INITIAL_STEPS);
 
-    addLog('Establishing encrypted session...', '');
-    try {
-      await genKeys();
-    } catch (e) {
-      addLog('Key generation failed: ' + e.message, 'error');
-      setRunning(false);
-      return;
-    }
-
     const t0 = performance.now();
 
     try {
-      // Step 1 — Validate
+      // ── Step 1: Validate ─────────────────────────────────────────────────
       setStep('validate', 'active', `Validating ${features.length} input features...`);
-      await sleep(150);
+      await sleep(80);
       setStep('validate', 'done',
         rawValues.map((v, i) => `${features[i].id}=${v}`).join(', '),
         +(performance.now() - t0).toFixed(1)
       );
       addLog(`Input validated: ${features.length} features`, '');
 
-      // Step 2 — Normalize
-      setStep('normalize', 'active', 'Applying min-max normalization [0, 1]...');
-      await sleep(150);
-      const { encryptedFeatures, normValues, encTimeMs } = encryptFeatures(rawValues, features);
+      // ── Step 2: Normalise ─────────────────────────────────────────────────
+      setStep('normalize', 'active', 'Applying min-max normalisation to [0, 1]...');
+      await sleep(80);
+      const { encryptedFeatures, normValues, encTimeMs } = encryptFeatures(
+        rawValues, features, keyState.publicKey
+      );
+      // normValues come back alongside ciphertexts so we can display them
       setStep('normalize', 'done',
-        `Normalized: [${normValues.map(v => v.toFixed(3)).join(', ')}]`,
+        `Normalised: [${normValues.map(v => v.toFixed(4)).join(', ')}]`,
         +(performance.now() - t0).toFixed(1)
       );
-      addLog('Features normalized', '');
+      addLog('Features normalised', '');
 
-      // Step 3 — Encrypt
-      setStep('encrypt', 'active', 'Encrypting with Paillier public key...');
-      await sleep(100);
-      const cipherPreview = encryptedFeatures
-        .map(e => e?.ciphertext?.slice(0, 12) + '...')
+      // ── Step 3: Encrypt (client-side, Paillier 2048-bit) ─────────────────
+      setStep('encrypt', 'active', `Encrypting ${features.length} features with Paillier public key...`);
+      // encryptFeatures already ran synchronously above; show ciphertext preview
+      const preview = encryptedFeatures
+        .map(e => e.ciphertext.slice(0, 10) + '…')
         .join(', ');
-      setStep('encrypt', 'done', `E(x): ${cipherPreview}`, encTimeMs);
-      addLog(`Paillier encryption done: ${encTimeMs}ms`, 'success');
+      setStep('encrypt', 'done',
+        `E(x): [${preview}] · exponent=${encryptedFeatures[0]?.exponent}`,
+        encTimeMs
+      );
+      addLog(`Client-side Paillier encryption: ${encTimeMs}ms`, 'success');
 
-      // Step 4 — Server inference (encrypt + HE compute + decrypt)
-      setStep('infer', 'active', 'Server encrypting, computing E(y) = Σ wᵢ·E(xᵢ) + b, decrypting...');
+      // ── Step 4: Server HE inference ───────────────────────────────────────
+      setStep('infer', 'active', 'Server computing E(y) = Σ wᵢ·E(xᵢ) + b on ciphertexts...');
       const inferStart = performance.now();
 
-      const response = await predictPlaintext(activeModel, normValues);
+      const serverResp = await predict(activeModel, keyState.publicKeyN, encryptedFeatures);
       const inferTimeMs = +(performance.now() - inferStart).toFixed(1);
 
       setStep('infer', 'done',
-        `Inference complete in ${inferTimeMs}ms`,
+        `E(score) received · exponent=${serverResp.encrypted_result.exponent} · ${inferTimeMs}ms`,
         inferTimeMs
       );
-      addLog(`Encrypted inference: ${inferTimeMs}ms`, 'success');
+      addLog(`Encrypted inference: ${inferTimeMs}ms (server never saw plaintext)`, 'success');
 
-      // Step 5 — Result
-      setStep('decrypt', 'active', 'Reading result...');
-      await sleep(100);
-      const { score, probability, risk } = response;
-      console.log('=== RESULT ===', { score, probability, risk });
-
+      // ── Step 5: Client-side decryption ────────────────────────────────────
+      setStep('decrypt', 'active', 'Decrypting E(score) with private key (browser only)...');
+      const { score, probability, risk, decTimeMs } = decryptAndInterpret(
+        serverResp.encrypted_result,
+        keyState.privateKey,
+        serverResp.threshold,
+      );
       const totalMs = +(performance.now() - t0).toFixed(1);
+
       setStep('decrypt', 'done',
         `score=${score.toFixed(4)} → P(disease)=${(probability * 100).toFixed(1)}% → ${risk}`,
         totalMs
       );
       addLog(
-        `Result: ${risk} RISK (${(probability * 100).toFixed(1)}%)`,
+        `Result: ${risk} RISK (${(probability * 100).toFixed(1)}%) · threshold=${serverResp.threshold}`,
         risk === 'HIGH' ? 'error' : 'success'
       );
 
@@ -156,47 +176,64 @@ export default function DiagnosisPage() {
         risk,
         probability,
         score,
-        modelLabel: currentModel.label,
-        encryptedResult: { ciphertext: 'server-side', exponent: 0 },
-        inferenceTimeMs: response.inference_time_ms,
+        modelLabel:        currentModel.label,
+        encryptedResult:   serverResp.encrypted_result,
+        inferenceTimeMs:   serverResp.inference_time_ms,
+        decTimeMs,
       });
       setMetrics({ keyBits: 2048, encTimeMs, inferTimeMs, totalTimeMs: totalMs });
 
     } catch (err) {
       console.error('Pipeline error:', err);
       addLog('Pipeline error: ' + err.message, 'error');
-      setStep('infer', 'error', 'Error: ' + err.message);
+      // Mark the active step as errored
+      setSteps(prev => {
+        const updated = { ...prev };
+        for (const k of Object.keys(updated)) {
+          if (updated[k].status === 'active') {
+            updated[k] = { ...updated[k], status: 'error', detail: err.message };
+          }
+        }
+        return updated;
+      });
     } finally {
       setRunning(false);
     }
   }
 
+  const keysReady = keyState.generated && !keyState.generating;
+
   return (
     <div className={styles.page}>
       <header className={styles.header}>
         <div className={styles.logo}>HEIMDALL</div>
-        <div className={styles.tagline}>Privacy-Preserving Medical Diagnosis · Paillier HE</div>
+        <div className={styles.tagline}>Privacy-Preserving Medical Diagnosis · Paillier HE · E2E Encrypted</div>
         <div className={styles.statusBar}>
           <StatusPill
-            active={keyState.generated}
-            label={keyState.generating ? 'Keys: Generating...' : 'Keys: Ready'}
+            active={keysReady}
+            loading={keyState.generating}
+            label={
+              keyState.generating ? 'Keys: Generating…' :
+              keysReady           ? 'Keys: Ready'       : 'Keys: Pending'
+            }
           />
           <StatusPill
             active={serverOnline === true}
             danger={serverOnline === false}
             label={
-              serverOnline === null ? 'Server: Checking...' :
-                serverOnline ? 'Server: Online' : 'Server: Offline'
+              serverOnline === null  ? 'Server: Checking…' :
+              serverOnline           ? 'Server: Online'    : 'Server: Offline'
             }
           />
           <StatusPill active label="TLS: Active" />
-          <StatusPill active label="PHI: Encrypted" />
+          <StatusPill active={keysReady} label={keysReady ? 'PHI: Encrypted' : 'PHI: Pending Keys'} />
         </div>
       </header>
 
       {serverOnline === false && (
         <div className={styles.offlineBanner}>
-          ⚠ Backend offline. Run: <code>cd backend &amp;&amp; uvicorn api.main:app --reload</code>
+          ⚠ Backend offline. Run:{' '}
+          <code>cd backend &amp;&amp; uvicorn api.main:app --reload</code>
         </div>
       )}
 
@@ -219,7 +256,7 @@ export default function DiagnosisPage() {
           </button>
         ))}
         {Object.keys(models).length === 0 && (
-          <div className={styles.loadingModels}>Loading models from API...</div>
+          <div className={styles.loadingModels}>Loading models from API…</div>
         )}
       </div>
 
@@ -246,9 +283,11 @@ export default function DiagnosisPage() {
           <button
             className={styles.runBtn}
             onClick={runPipeline}
-            disabled={running || !serverOnline}
+            disabled={running || !serverOnline || !keysReady}
           >
-            {running ? '⟳ Running Pipeline...' : '⚡ Encrypt & Predict'}
+            {running         ? '⟳ Running Pipeline…'   :
+             !keysReady      ? '⏳ Awaiting Key Generation…' :
+                               '⚡ Encrypt & Predict'}
           </button>
         </div>
       )}
@@ -261,12 +300,13 @@ export default function DiagnosisPage() {
   );
 }
 
-function StatusPill({ active, label, danger }) {
+function StatusPill({ active, danger, loading, label }) {
   return (
     <div className={[
       styles.pill,
-      active ? styles.pillActive : '',
-      danger ? styles.pillDanger : '',
+      active  ? styles.pillActive  : '',
+      danger  ? styles.pillDanger  : '',
+      loading ? styles.pillLoading : '',
     ].join(' ')}>
       <span className={styles.dot} />
       {label}

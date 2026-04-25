@@ -1,46 +1,71 @@
 import { useState, useCallback } from 'react';
-import { predictPlaintext } from '../utils/api';
+import {
+  generateKeyPair,
+  encryptVector,
+  decryptResult,
+  normalizeFeature,
+  sigmoid,
+} from '../utils/crypto';
 
 export function usePaillier() {
   const [keyState, setKeyState] = useState({
-    generated: true,   // always ready — no JS crypto needed
+    generated: false,
     generating: false,
     publicKeyN: null,
-    sessionId: null,
+    publicKey: null,
+    privateKey: null,
   });
 
-  // No-op — keys generated server-side now
+  /**
+   * Generate a fresh 2048-bit Paillier keypair in the browser.
+   * Keys never leave the client — only the public modulus n is shared.
+   */
   const genKeys = useCallback(async () => {
-    setKeyState(s => ({ ...s, generated: true }));
-    return {};
+    setKeyState(s => ({ ...s, generating: true, generated: false }));
+    try {
+      const { publicKey, privateKey, n } = await generateKeyPair(2048);
+      setKeyState({
+        generated: true,
+        generating: false,
+        publicKeyN: n,
+        publicKey,
+        privateKey,
+      });
+      return { publicKeyN: n };
+    } catch (err) {
+      setKeyState(s => ({ ...s, generating: false }));
+      throw err;
+    }
   }, []);
 
-  const encryptFeatures = useCallback((rawValues, modelFeatures) => {
+  /**
+   * Normalise raw feature values then encrypt each with the Paillier public key.
+   * Returns the ciphertext array ready to POST to /api/predict.
+   */
+  const encryptFeatures = useCallback((rawValues, modelFeatures, publicKey) => {
     const t0 = performance.now();
 
-    // Normalize features
     const normValues = rawValues.map((v, i) =>
-      Math.max(0, Math.min(1,
-        (v - modelFeatures[i].min) / (modelFeatures[i].max - modelFeatures[i].min)
-      ))
+      normalizeFeature(v, modelFeatures[i].min, modelFeatures[i].max)
     );
 
-    console.log('[encryptFeatures] normValues:', normValues);
-
-    // Return normalized values — server will encrypt with phe
+    const encryptedFeatures = encryptVector(normValues, publicKey);
     const encTimeMs = +(performance.now() - t0).toFixed(2);
-    return {
-      encryptedFeatures: normValues,  // plain normalized values sent over TLS
-      normValues,
-      encTimeMs,
-    };
+
+    return { encryptedFeatures, normValues, encTimeMs };
   }, []);
 
-  const decryptAndInterpret = useCallback(async (encryptedResult, modelId) => {
-    // Result already decrypted by server — just return it
-    const { risk, probability, score } = encryptedResult;
-    console.log('[decryptAndInterpret]', { score, probability, risk });
-    return { score, probability, risk };
+  /**
+   * Decrypt the server's encrypted result and interpret as a risk assessment.
+   * score → sigmoid → probability → threshold comparison → HIGH / LOW
+   */
+  const decryptAndInterpret = useCallback((encryptedResult, privateKey, threshold = 0.5) => {
+    const t0 = performance.now();
+    const score       = decryptResult(encryptedResult, privateKey);
+    const probability = sigmoid(score);
+    const risk        = probability > threshold ? 'HIGH' : 'LOW';
+    const decTimeMs   = +(performance.now() - t0).toFixed(2);
+    return { score, probability, risk, decTimeMs };
   }, []);
 
   return { keyState, genKeys, encryptFeatures, decryptAndInterpret };
