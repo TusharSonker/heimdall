@@ -1,0 +1,80 @@
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+.header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+.title {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  flex: 1;
+}
+.note {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+.btn {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  padding: 0.45rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: rgba(0, 212, 170, 0.08);
+  color: var(--accent);
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: background 0.15s;
+}
+.btn:hover { background: rgba(0, 212, 170, 0.18); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+@media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+
+.keyBox {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+.label {
+  font-size: 0.68rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-bottom: 0.4rem;
+}
+.value {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--text);
+  word-break: break-all;
+  opacity: 0.8;
+  line-height: 1.5;
+}
+.progress {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--warn);
+  margin-top: 0.75rem;
+  animation: blink 1s infinite;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.4} }

@@ -1,0 +1,116 @@
+{
+  "diabetes": {
+    "weights": [
+      5.75533623,
+      3.37774489,
+      2.25690634,
+      0.76301865
+    ],
+    "bias": -4.77068599,
+    "threshold": 0.4346,
+    "feature_names": [
+      "Glucose",
+      "BMI",
+      "Age",
+      "BloodPressure"
+    ],
+    "feature_mins": [
+      0,
+      10,
+      1,
+      40
+    ],
+    "feature_maxs": [
+      300,
+      60,
+      120,
+      200
+    ],
+    "metrics": {
+      "accuracy": 0.6883,
+      "precision": 0.5455,
+      "recall": 0.6667,
+      "f1": 0.6,
+      "auc": 0.7798,
+      "cv_mean": 0.7253,
+      "cv_std": 0.0339,
+      "n_samples": 768
+    }
+  },
+  "heart": {
+    "weights": [
+      0.82603114,
+      -2.61300991,
+      1.15565612,
+      1.29107435
+    ],
+    "bias": -0.44161706,
+    "threshold": 0.5119,
+    "feature_names": [
+      "age",
+      "thalach",
+      "trestbps",
+      "cp"
+    ],
+    "feature_mins": [
+      1,
+      60,
+      80,
+      0
+    ],
+    "feature_maxs": [
+      120,
+      220,
+      250,
+      3
+    ],
+    "metrics": {
+      "accuracy": 0.85,
+      "precision": 0.88,
+      "recall": 0.7857,
+      "f1": 0.8302,
+      "auc": 0.8772,
+      "cv_mean": 0.7069,
+      "cv_std": 0.0414,
+      "n_samples": 297
+    }
+  },
+  "anemia": {
+    "weights": [
+      -13.92226671,
+      -0.19437932,
+      0.70702177,
+      -0.74095987
+    ],
+    "bias": 8.05588403,
+    "threshold": 0.4968,
+    "feature_names": [
+      "hemoglobin",
+      "mch",
+      "mchc",
+      "mcv"
+    ],
+    "feature_mins": [
+      4,
+      15,
+      20,
+      50
+    ],
+    "feature_maxs": [
+      20,
+      40,
+      40,
+      120
+    ],
+    "metrics": {
+      "accuracy": 0.9123,
+      "precision": 0.8561,
+      "recall": 0.9597,
+      "f1": 0.9049,
+      "auc": 0.9752,
+      "cv_mean": 0.8972,
+      "cv_std": 0.0181,
+      "n_samples": 1421
+    }
+  }
+}
