@@ -60,3 +60,76 @@
   font-size: 0.62rem;
   color: var(--muted);
 }
+
+/* ── Method comparison section ─────────────────────────────────────────────── */
+.compareLabel {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent2);
+  margin-bottom: 0.75rem;
+}
+
+.compareGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.9rem;
+  margin-bottom: 0.75rem;
+}
+
+.pathCard {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+}
+.pathHigh { border-color: var(--danger); background: rgba(248,113,113,0.06); }
+.pathLow  { border-color: var(--accent); background: rgba(0,212,170,0.06); }
+
+.pathLabel {
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+}
+
+.pathRisk {
+  font-family: var(--mono);
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 0.3rem;
+}
+.riskHigh { color: var(--danger); }
+.riskLow  { color: var(--accent); }
+
+.pathMeta {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.pathTime {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  color: var(--accent2);
+  margin-top: 0.4rem;
+}
+
+/* ── Delta / match bar ─────────────────────────────────────────────────────── */
+.deltaBar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.9rem;
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+}
+.deltaMatch    { background: rgba(0,212,170,0.08);  border: 1px solid var(--accent); color: var(--accent); }
+.deltaMismatch { background: rgba(248,113,113,0.08); border: 1px solid var(--danger); color: var(--danger); }
+
+.deltaIcon    { font-size: 0.9rem; }
+.deltaVerdict { margin-left: auto; font-weight: 700; letter-spacing: 0.07em; }

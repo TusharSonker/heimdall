@@ -12,9 +12,17 @@ This works because Paillier supports:
     E(a) * scalar  =  E(scalar * a)
     E(a) + E(b)    =  E(a + b)
 
-encrypted_linear_inference_raw bypasses phe's base-16 encoding so that
-JS-generated ciphertexts (which use base-10 scaling of 1e6) produce the
-correct score when the client decrypts with base-10 exponent arithmetic.
+Cross-Library Interoperability (BASE=10)
+-----------------------------------------
+`encrypted_linear_inference` now uses Base10EncodedNumber for ALL scalar
+operations.  phe's __mul__ and __add__ accept EncodedNumber subclasses
+directly (paillier.py line 510: `if isinstance(other, EncodedNumber)`),
+so passing Base10EncodedNumber instances forces phe to track exponents in
+decimal — matching the JS wire convention (exponent = -6 means × 10^-6).
+No monkey-patching.  No bypassing phe.
+
+`encrypted_linear_inference_raw` is kept for reference / paper comparison
+only.  The production endpoint (/api/predict) uses the primary path above.
 """
 
 import json
@@ -22,7 +30,7 @@ import math
 import secrets
 from pathlib import Path
 import phe as paillier
-from .encryption import reconstruct_encrypted_number
+from .encryption import reconstruct_encrypted_number, Base10EncodedNumber
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 _WEIGHTS_FILE = Path(__file__).parent / "trained_weights.json"
@@ -120,14 +128,21 @@ def normalize_features(model_id: str, raw_values: list) -> list:
             for i, v in enumerate(raw_values)]
 
 
-# ── Encrypted inference ────────────────────────────────────────────────────
+# ── Encrypted inference (BASE=10, JS-compatible) ──────────────────────────
 def encrypted_linear_inference(
     public_key: paillier.PaillierPublicKey,
     encrypted_features: list,
-    model_id: str
+    model_id: str,
 ) -> dict:
     """
-    Compute E(y) = Σ wᵢ·E(xᵢ) + b using homomorphic operations.
+    Compute E(y) = Σ wᵢ·E(xᵢ) + b using phe homomorphic operations.
+
+    Fully compatible with JS-generated ciphertexts (BASE=10 wire format).
+    All weight and bias scalars are encoded as Base10EncodedNumber before
+    being passed to phe arithmetic — this is the official phe extension
+    point (paillier.py: `if isinstance(other, EncodedNumber): encoding = other`).
+    phe never calls EncodedNumber.encode() with BASE=16 on any of our scalars.
+
     Server NEVER decrypts — only sees ciphertexts.
     """
     w       = TRAINED_WEIGHTS[model_id]
@@ -139,15 +154,22 @@ def encrypted_linear_inference(
 
     enc_nums = [reconstruct_encrypted_number(public_key, ef) for ef in encrypted_features]
 
-    result = enc_nums[0] * weights[0]
+    # Encode each weight as Base10EncodedNumber so phe uses BASE=10 arithmetic
+    result = enc_nums[0] * Base10EncodedNumber.encode(public_key, weights[0])
     for i in range(1, len(enc_nums)):
-        result = result + enc_nums[i] * weights[i]
-    result = result + bias
+        result = result + enc_nums[i] * Base10EncodedNumber.encode(public_key, weights[i])
+
+    # Encode bias as Base10EncodedNumber for consistent exponent tracking
+    result = result + Base10EncodedNumber.encode(public_key, bias)
 
     return {"ciphertext": str(result.ciphertext()), "exponent": result.exponent}
 
 
-# ── Raw Paillier inference (JS-compatible) ─────────────────────────────────
+# ── Raw Paillier inference (kept for paper comparison / Table 8) ───────────
+# This function bypasses phe entirely and works in raw Z_{n²} arithmetic.
+# It is documented in the paper (§V-B) as the alternative base-agnostic
+# approach but is NO LONGER used in production — encrypted_linear_inference
+# above (with Base10EncodedNumber) is the primary path.
 
 # JS scales each normalised feature by FEATURE_SCALE before encrypting.
 # The server scales each weight by WEIGHT_SCALE (integer approximation).

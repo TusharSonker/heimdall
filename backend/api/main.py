@@ -12,7 +12,7 @@ import math
 import logging
 import phe as paillier
 
-from core.encryption import deserialize_public_key, decrypt_value
+from core.encryption import deserialize_public_key, decrypt_value, Base10EncodedNumber
 from core.models import (
     normalize_features,
     encrypted_linear_inference,
@@ -157,7 +157,7 @@ def predict(req: PredictRequest):
 
     try:
         enc_features    = [f.model_dump() for f in req.encrypted_features]
-        encrypted_result = encrypted_linear_inference_raw(public_key, enc_features, req.model_id)
+        encrypted_result = encrypted_linear_inference(public_key, enc_features, req.model_id)
     except Exception as e:
         logger.error(f"[{req.model_id}] Inference error: {e}")
         raise HTTPException(status_code=500, detail=f"Inference failed: {e}")
@@ -172,6 +172,57 @@ def predict(req: PredictRequest):
         encrypted_result=encrypted_result,
         threshold=threshold,
         inference_time_ms=round(elapsed_ms, 2),
+    )
+
+
+@app.post("/api/predict-raw", response_model=PredictResponse, tags=["Inference"])
+def predict_raw(req: PredictRequest):
+    """
+    Encrypted inference using raw Paillier arithmetic — no phe EncodedNumber layer.
+
+    Instead of relying on Base10EncodedNumber to bridge the JS/Python base convention,
+    this path works directly in Z_{n²}:
+      - Weights are quantised to integers scaled by WEIGHT_SCALE (10^6).
+      - Bias is scaled by TOTAL_SCALE (10^12).
+      - All arithmetic is raw modular exponentiation / multiplication mod n².
+      - The returned exponent (-12) tells the JS client to divide the BigInt by 10^12.
+
+    This is the original interop solution kept for comparison.  Both /api/predict
+    (phe + Base10EncodedNumber) and this endpoint must produce scores within 1e-4
+    of each other and of the plaintext dot-product — visible on the frontend.
+    """
+    start = time.perf_counter()
+
+    try:
+        public_key = deserialize_public_key({"n": req.public_key.n})
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid public key: {e}")
+
+    expected = len(MODEL_SPECS[req.model_id]["features"])
+    if len(req.encrypted_features) != expected:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Expected {expected} encrypted features, got {len(req.encrypted_features)}",
+        )
+
+    try:
+        enc_features     = [f.model_dump() for f in req.encrypted_features]
+        encrypted_result = encrypted_linear_inference_raw(public_key, enc_features, req.model_id)
+    except Exception as e:
+        logger.error(f"[{req.model_id}] Raw inference error: {e}")
+        raise HTTPException(status_code=500, detail=f"Raw inference failed: {e}")
+
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    threshold  = TRAINED_WEIGHTS[req.model_id].get("threshold", 0.5)
+
+    logger.info(f"[{req.model_id}] Raw Paillier inference in {elapsed_ms:.2f}ms")
+
+    return PredictResponse(
+        model_id=req.model_id,
+        encrypted_result=encrypted_result,
+        threshold=threshold,
+        inference_time_ms=round(elapsed_ms, 2),
+        server_note="Raw Paillier arithmetic (no phe encoding). Compare with /api/predict.",
     )
 
 
@@ -254,7 +305,7 @@ def predict_plaintext(req: PlaintextPredictRequest):
 
     enc_num = paillier.EncryptedNumber(pub, int(enc_result["ciphertext"]),
                                        enc_result["exponent"])
-    score       = priv.decrypt(enc_num)
+    score       = priv.decrypt_encoded(enc_num, Encoding=Base10EncodedNumber).decode()
     probability = sigmoid(score)
     threshold   = TRAINED_WEIGHTS[req.model_id].get("threshold", 0.5)
     risk        = "HIGH" if probability > threshold else "LOW"

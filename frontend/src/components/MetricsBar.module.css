@@ -1,6 +1,6 @@
 .grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 0.75rem;
   margin-bottom: 1.5rem;
 }
@@ -26,4 +26,8 @@
   text-transform: uppercase;
   letter-spacing: 0.08em;
   margin-top: 0.25rem;
+}
+
+.cardAccent {
+  border-color: var(--accent2);
 }

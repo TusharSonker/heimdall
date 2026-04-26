@@ -17,6 +17,7 @@ from core.encryption import (
     encrypt_vector,
     decrypt_value,
     reconstruct_encrypted_number,
+    Base10EncodedNumber,
 )
 from core.models import (
     normalize_features,
@@ -60,7 +61,7 @@ class TestEncryption:
         values = [0.5, 1.23, -0.7, 100.0]
         enc_list = encrypt_vector(pub, values)
         for orig, enc_dict in zip(values, enc_list):
-            decrypted = decrypt_value(priv, enc_dict)
+            decrypted = decrypt_value(priv, enc_dict)  # uses Base10 decode
             assert abs(decrypted - orig) < 1e-6, f"Mismatch: {orig} != {decrypted}"
 
     def test_additive_homomorphism(self, keypair):
@@ -118,8 +119,8 @@ class TestNormalization:
 class TestEncryptedInference:
     def test_encrypted_matches_plaintext(self, keypair):
         """
-        Core correctness test: encrypted inference must produce the
-        same result as plaintext linear evaluation.
+        Core correctness test: encrypted inference (using phe + BASE=10)
+        must produce the same score as plaintext linear evaluation.
         """
         pub, priv = keypair
 
@@ -133,10 +134,10 @@ class TestEncryptedInference:
             w = TRAINED_WEIGHTS[model_id]
             plain_score = sum(w["weights"][i] * norm_vals[i] for i in range(n_features)) + w["bias"]
 
-            # Encrypted result
-            enc_list = encrypt_vector(pub, norm_vals)
+            # Encrypted result via phe + Base10EncodedNumber
+            enc_list   = encrypt_vector(pub, norm_vals)   # BASE=10 encode
             enc_result = encrypted_linear_inference(pub, enc_list, model_id)
-            decrypted_score = decrypt_value(priv, enc_result)
+            decrypted_score = decrypt_value(priv, enc_result)  # BASE=10 decode
 
             assert abs(decrypted_score - plain_score) < 1e-4, (
                 f"{model_id}: plaintext={plain_score:.6f}, encrypted={decrypted_score:.6f}"

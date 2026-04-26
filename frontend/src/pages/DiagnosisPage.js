@@ -5,7 +5,7 @@ import ResultPanel from '../components/ResultPanel';
 import MetricsBar from '../components/MetricsBar';
 import AuditLog from '../components/AuditLog';
 import { usePaillier } from '../hooks/usePaillier';
-import { fetchModels, predict } from '../utils/api';
+import { fetchModels, predict, predictRaw } from '../utils/api';
 import styles from './DiagnosisPage.module.css';
 
 const INITIAL_STEPS = {
@@ -141,47 +141,71 @@ export default function DiagnosisPage() {
       );
       addLog(`Client-side Paillier encryption: ${encTimeMs}ms`, 'success');
 
-      // ── Step 4: Server HE inference ───────────────────────────────────────
-      setStep('infer', 'active', 'Server computing E(y) = Σ wᵢ·E(xᵢ) + b on ciphertexts...');
+      // ── Step 4: Server HE inference (both paths in parallel) ─────────────
+      setStep('infer', 'active',
+        'Server computing E(y) = Σ wᵢ·E(xᵢ) + b — phe path & raw path in parallel...'
+      );
       const inferStart = performance.now();
 
-      const serverResp = await predict(activeModel, keyState.publicKeyN, encryptedFeatures);
+      const [serverResp, serverRespRaw] = await Promise.all([
+        predict(activeModel, keyState.publicKeyN, encryptedFeatures),
+        predictRaw(activeModel, keyState.publicKeyN, encryptedFeatures),
+      ]);
       const inferTimeMs = +(performance.now() - inferStart).toFixed(1);
 
       setStep('infer', 'done',
-        `E(score) received · exponent=${serverResp.encrypted_result.exponent} · ${inferTimeMs}ms`,
+        `E(score) received · phe=${serverResp.inference_time_ms}ms · raw=${serverRespRaw.inference_time_ms}ms`,
         inferTimeMs
       );
-      addLog(`Encrypted inference: ${inferTimeMs}ms (server never saw plaintext)`, 'success');
-
-      // ── Step 5: Client-side decryption ────────────────────────────────────
-      setStep('decrypt', 'active', 'Decrypting E(score) with private key (browser only)...');
-      const { score, probability, risk, decTimeMs } = decryptAndInterpret(
-        serverResp.encrypted_result,
-        keyState.privateKey,
-        serverResp.threshold,
+      addLog(
+        `Encrypted inference: phe=${serverResp.inference_time_ms}ms, raw=${serverRespRaw.inference_time_ms}ms`,
+        'success'
       );
+
+      // ── Step 5: Client-side decryption (both ciphertexts) ────────────────
+      setStep('decrypt', 'active', 'Decrypting both E(score) ciphertexts with private key...');
+
+      const { score: pheScore, probability: pheProb, risk: pheRisk, decTimeMs } =
+        decryptAndInterpret(serverResp.encrypted_result, keyState.privateKey, serverResp.threshold);
+
+      const { score: rawScore, probability: rawProb, risk: rawRisk } =
+        decryptAndInterpret(serverRespRaw.encrypted_result, keyState.privateKey, serverRespRaw.threshold);
+
+      const delta   = Math.abs(pheScore - rawScore);
+      const isMatch = delta < 1e-4;
       const totalMs = +(performance.now() - t0).toFixed(1);
 
       setStep('decrypt', 'done',
-        `score=${score.toFixed(4)} → P(disease)=${(probability * 100).toFixed(1)}% → ${risk}`,
+        `phe: ${pheScore.toFixed(4)} → ${pheRisk} · raw: ${rawScore.toFixed(4)} → ${rawRisk} · Δ=${delta.toExponential(2)}`,
         totalMs
       );
       addLog(
-        `Result: ${risk} RISK (${(probability * 100).toFixed(1)}%) · threshold=${serverResp.threshold}`,
-        risk === 'HIGH' ? 'error' : 'success'
+        `phe: ${pheRisk} (${(pheProb * 100).toFixed(1)}%) · raw: ${rawRisk} (${(rawProb * 100).toFixed(1)}%) · Δ=${delta.toExponential(2)} · ${isMatch ? 'MATCH' : 'MISMATCH'}`,
+        isMatch ? 'success' : 'error'
       );
 
       setResult({
-        risk,
-        probability,
-        score,
-        modelLabel:        currentModel.label,
-        encryptedResult:   serverResp.encrypted_result,
-        inferenceTimeMs:   serverResp.inference_time_ms,
+        risk:            pheRisk,
+        probability:     pheProb,
+        score:           pheScore,
+        modelLabel:      currentModel.label,
+        encryptedResult: serverResp.encrypted_result,
+        inferenceTimeMs: serverResp.inference_time_ms,
         decTimeMs,
+        comparison: {
+          phe: { score: pheScore, probability: pheProb, risk: pheRisk, inferenceTimeMs: serverResp.inference_time_ms },
+          raw: { score: rawScore, probability: rawProb, risk: rawRisk, inferenceTimeMs: serverRespRaw.inference_time_ms },
+          delta,
+          match: isMatch,
+        },
       });
-      setMetrics({ keyBits: 2048, encTimeMs, inferTimeMs, totalTimeMs: totalMs });
+      setMetrics({
+        keyBits:         2048,
+        encTimeMs,
+        pheInferTimeMs:  serverResp.inference_time_ms,
+        rawInferTimeMs:  serverRespRaw.inference_time_ms,
+        totalTimeMs:     totalMs,
+      });
 
     } catch (err) {
       console.error('Pipeline error:', err);

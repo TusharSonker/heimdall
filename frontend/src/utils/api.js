@@ -40,6 +40,24 @@ export async function predict(modelId, publicKeyN, encryptedFeatures) {
 }
 
 /**
+ * Submit encrypted features for inference using raw Paillier arithmetic.
+ * Parallel to predict() but calls /api/predict-raw (no phe encoding layer).
+ *
+ * @param {string} modelId
+ * @param {string} publicKeyN
+ * @param {Array}  encryptedFeatures - [{ciphertext, exponent}, ...]
+ * @returns {Promise<Object>} { encrypted_result, inference_time_ms, ... }
+ */
+export async function predictRaw(modelId, publicKeyN, encryptedFeatures) {
+  const { data } = await api.post('/api/predict-raw', {
+    model_id: modelId,
+    public_key: { n: publicKeyN },
+    encrypted_features: encryptedFeatures,
+  });
+  return data;
+}
+
+/**
  * Fetch benchmark stats for a given model.
  * @param {string} modelId
  */
