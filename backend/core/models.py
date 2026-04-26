@@ -129,6 +129,15 @@ def encrypted_linear_inference(
     """
     Compute E(y) = Σ wᵢ·E(xᵢ) + b using homomorphic operations.
     Server NEVER decrypts — only sees ciphertexts.
+
+    Limitation: fails for models whose weights span more than one order of
+    magnitude (e.g. anemia: w0=−13.92 vs w1=−0.19). When two EncryptedNumbers
+    with different product-exponents are added, phe calls
+    EncryptedNumber.decrease_exponent_to, which hardcodes EncodedNumber.BASE=16
+    instead of Base10EncodedNumber.BASE=10. Each alignment step introduces a
+    (16/10)^k error. Diabetes and heart work because their weights all encode at
+    the same exponent, so no EncryptedNumber alignment is ever triggered.
+    Use encrypted_linear_inference_raw for guaranteed correctness on all models.
     """
     w       = TRAINED_WEIGHTS[model_id]
     weights = w["weights"]

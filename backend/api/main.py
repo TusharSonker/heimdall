@@ -130,16 +130,24 @@ def list_models():
 @app.post("/api/predict", response_model=PredictResponse, tags=["Inference"])
 def predict(req: PredictRequest):
     """
-    True end-to-end encrypted inference.
+    True end-to-end encrypted inference (raw Paillier arithmetic).
 
     The client generates a Paillier keypair locally in the browser, encrypts
     each normalised feature, and sends only ciphertexts.  The server:
       1. Reconstructs the public key (no private key is ever sent).
-      2. Computes E(y) = Σ wᵢ·E(xᵢ) + b entirely in ciphertext space.
+      2. Computes E(y) = Σ wᵢ·E(xᵢ) + b entirely in ciphertext space
+         using raw pow(c, k, n²) — no phe encoding layer.
       3. Returns the ENCRYPTED result — never decrypts it.
 
     The client decrypts the result with its private key (which never leaves
     the browser) and applies sigmoid + threshold to determine risk.
+
+    Why raw path as default: the Base10EncodedNumber path fails for models
+    whose weights span more than one order of magnitude (e.g. anemia).
+    Root cause: EncryptedNumber.decrease_exponent_to (called when summing
+    terms with different exponents) hardcodes EncodedNumber.BASE=16, not
+    Base10EncodedNumber.BASE=10 — introducing (16/10)^k error per alignment.
+    The raw path bypasses phe's encoding layer entirely, so this never occurs.
     """
     start = time.perf_counter()
 
@@ -178,14 +186,21 @@ def predict(req: PredictRequest):
 @app.post("/api/predict-raw", response_model=PredictResponse, tags=["Inference"])
 def predict_raw(req: PredictRequest):
     """
-    Encrypted inference using raw Paillier arithmetic — no phe encoding layer.
+    Encrypted inference using the Base10EncodedNumber path (phe with BASE=10).
 
-    Bypasses Base10EncodedNumber entirely. Weights are quantised to integers
-    (× 10^6), bias to 10^12, and all arithmetic is raw modular exponentiation
-    in Z_{n²}. The returned exponent is always -12.
+    Wraps JS-generated ciphertexts in phe.EncryptedNumber and performs all
+    weight/bias arithmetic via Base10EncodedNumber scalars, so phe's internal
+    exponent tracking stays in decimal (matching the JS wire convention).
 
     Produces the same score as /api/predict within quantisation tolerance (~1e-6).
-    Kept for paper comparison (§V: two independent interop solutions).
+    Both paths are correct for all models. This endpoint is kept for paper
+    comparison (§V: two independent interop solutions verified to agree).
+
+    Correctness note: only works for models where all weight-term products
+    share the same exponent (no EncryptedNumber-to-EncryptedNumber alignment
+    triggered). Diabetes and heart satisfy this; anemia does not (w0=-13.92
+    encodes at a different exponent than the other weights), causing
+    EncryptedNumber.decrease_exponent_to to fire using BASE=16 instead of 10.
     """
     start = time.perf_counter()
 

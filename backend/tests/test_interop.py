@@ -99,18 +99,37 @@ def test_naive_phe_path_is_wrong():
 # Test 2 — Base10EncodedNumber fix produces correct results
 # ---------------------------------------------------------------------------
 
-# Anemia's w0 = -13.92 causes phe to store the weight as n - 13922267 (modular
-# complement, a 308-digit number). When phe's decrease_exponent_to() then
-# multiplies this by 10^k to equalise exponents across terms, precision is lost.
-# The raw path avoids this by using pow(c, -13922267, n²) directly.
-# This is documented as a limitation of the Base10 approach in §V of the paper.
-_BASE10_LARGE_WEIGHT_BROKEN = {"anemia"}
+# Models where Base10EncodedNumber path fails due to EncryptedNumber.decrease_exponent_to
+# using the hardcoded EncodedNumber.BASE=16 (not Base10EncodedNumber.BASE=10).
+#
+# Root cause: when two EncryptedNumbers have different product-exponents, phe's
+# __add__ calls EncryptedNumber.decrease_exponent_to, which multiplies by
+# pow(EncodedNumber.BASE, k) = 16^k instead of 10^k, introducing an error of
+# (16/10)^k per alignment step.
+#
+# Affected: any model whose weights span more than one order of magnitude
+# (different exponents from Base10EncodedNumber.encode → different product
+# exponents after multiplication → alignment required → wrong BASE used).
+#
+# Safe: models where all weight-term products share the same exponent
+# (no EncryptedNumber alignment called; bias via _add_encoded uses cls.BASE=10).
+#
+# Empirical: diabetes/heart weights all encode at exponent -16 → products all -22
+# (no alignment). Anemia: w0=-13.92 encodes at -15 → product -21, others at -17
+# → -23 (exponent diff=2 triggers 16^2=256 instead of 10^2=100).
+_BASE10_ENC_ALIGN_BROKEN = {"anemia"}
 
 @pytest.mark.parametrize("model_id", ["diabetes", "heart", "anemia"])
 def test_base10_inference_matches_plaintext(model_id):
     """
     encrypted_linear_inference (Base10EncodedNumber path) must match
-    plaintext logistic regression within quantisation tolerance on every model.
+    plaintext logistic regression within quantisation tolerance.
+
+    Fails for anemia because its weights span more than one order of magnitude,
+    triggering EncryptedNumber.decrease_exponent_to (alignment during addition).
+    That method hardcodes EncodedNumber.BASE=16, not Base10EncodedNumber.BASE=10,
+    introducing (16/10)^2 ≈ 2.56× error per alignment step. The raw arithmetic
+    path avoids this entirely by never using phe's encoding layer.
     """
     pub, priv = make_keys()
     n_feat = len(TRAINED_WEIGHTS[model_id]["weights"])
@@ -130,13 +149,14 @@ def test_base10_inference_matches_plaintext(model_id):
     mean_err = statistics.mean(errors)
     max_err  = max(errors)
 
-    if model_id in _BASE10_LARGE_WEIGHT_BROKEN:
+    if model_id in _BASE10_ENC_ALIGN_BROKEN:
         pytest.xfail(
-            f"[{model_id}] Base10 known limitation: large weight "
-            f"w0={TRAINED_WEIGHTS[model_id]['weights'][0]:.2f} causes phe "
-            f"modular-complement precision loss (max_err={max_err:.2e}). "
-            f"Use raw path. See §V of paper."
+            f"[{model_id}] EncryptedNumber.decrease_exponent_to uses "
+            f"EncodedNumber.BASE=16 not Base10EncodedNumber.BASE=10. "
+            f"Weights span multiple orders of magnitude → alignment fires → "
+            f"(16/10)^k error (max_err={max_err:.2e}). Use raw path."
         )
+
     assert max_err < 1e-3, (
         f"[{model_id}] Base10 path: max |Δscore| = {max_err:.2e} exceeds 1e-3"
     )
@@ -209,7 +229,7 @@ def test_base10_and_raw_agree(model_id):
         score_int = priv.decrypt(paillier.EncryptedNumber(pub, int(r2["ciphertext"]), 0))
         score2 = score_int / 10**12
 
-        if model_id not in _BASE10_LARGE_WEIGHT_BROKEN:
+        if model_id not in _BASE10_ENC_ALIGN_BROKEN:
             assert abs(score1 - score2) < 1e-3, (
                 f"[{model_id}] Base10 score={score1:.6f} vs Raw score={score2:.6f}: "
                 f"divergence {abs(score1-score2):.2e} exceeds 1e-3"
@@ -217,11 +237,12 @@ def test_base10_and_raw_agree(model_id):
             if (sigmoid(score1) > threshold) != (sigmoid(score2) > threshold):
                 disagreements += 1
 
-    if model_id in _BASE10_LARGE_WEIGHT_BROKEN:
+    if model_id in _BASE10_ENC_ALIGN_BROKEN:
         pytest.xfail(
-            f"[{model_id}] Base10 path known limitation for large weights — "
-            f"raw path is authoritative for this model."
+            f"[{model_id}] Base10 path broken by EncryptedNumber.decrease_exponent_to "
+            f"using BASE=16 — raw path is authoritative for this model."
         )
+
     assert disagreements == 0, (
         f"[{model_id}] {disagreements}/30 classification disagreements between "
         f"Base10 and Raw paths"
