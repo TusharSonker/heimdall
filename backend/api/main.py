@@ -157,7 +157,7 @@ def predict(req: PredictRequest):
 
     try:
         enc_features    = [f.model_dump() for f in req.encrypted_features]
-        encrypted_result = encrypted_linear_inference(public_key, enc_features, req.model_id)
+        encrypted_result = encrypted_linear_inference_raw(public_key, enc_features, req.model_id)
     except Exception as e:
         logger.error(f"[{req.model_id}] Inference error: {e}")
         raise HTTPException(status_code=500, detail=f"Inference failed: {e}")
@@ -207,7 +207,7 @@ def predict_raw(req: PredictRequest):
 
     try:
         enc_features     = [f.model_dump() for f in req.encrypted_features]
-        encrypted_result = encrypted_linear_inference_raw(public_key, enc_features, req.model_id)
+        encrypted_result = encrypted_linear_inference(public_key, enc_features, req.model_id)
     except Exception as e:
         logger.error(f"[{req.model_id}] Raw inference error: {e}")
         raise HTTPException(status_code=500, detail=f"Raw inference failed: {e}")
