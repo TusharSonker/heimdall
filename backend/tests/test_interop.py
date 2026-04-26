@@ -366,8 +366,216 @@ class TestExponentRoundtrip:
 
 
 # ---------------------------------------------------------------------------
-# Run as script
+# Test 5: Verify the claim about Base10EncodedNumber and positive/negative weights
 # ---------------------------------------------------------------------------
+
+# Actual weights from trained_weights.json — used across all sub-tests
+_DIABETES_WEIGHTS = [5.75533623, 3.37774489, 2.25690634,  0.76301865]  # all positive
+_HEART_WEIGHTS    = [0.82603114, -2.61300991, 1.15565612,  1.29107435]  # one negative
+_ANEMIA_WEIGHTS   = [-13.92226671, -0.19437932, 0.70702177, -0.74095987]  # three negatives
+
+
+class TestBase10EncodingClaim:
+    """
+    Verifies (and where necessary refutes) the claim:
+
+        "For positive weights like 5.755 or 0.707, Base10EncodedNumber works
+         perfectly — phe stores them as positive integers (5755336 or 707022)
+         and the arithmetic is fine."
+
+    Five concrete questions are answered:
+      1. Are positive weights stored as positive integers by phe?
+      2. Are the claimed integers (5755336, 707022) what phe actually stores?
+      3. Does the arithmetic round-trip correctly for positive weights?
+      4. What does phe store for negative weights — negative or wrapped?
+      5. Does the arithmetic round-trip correctly for negative weights (anemia)?
+    """
+
+    # ── Q1: positive weight → positive integer? ──────────────────────────────
+
+    def test_positive_weight_encodes_as_positive_integer(self, keypair):
+        """
+        Claim: phe stores positive weights as 'normal positive integers'.
+        Verify: encoding attribute is positive for every positive weight.
+        Applies to all diabetes weights and the one positive anemia weight.
+        """
+        pub, _ = keypair
+        positive_weights = [w for w in _DIABETES_WEIGHTS + _ANEMIA_WEIGHTS if w > 0]
+
+        for wi in positive_weights:
+            enc = Base10EncodedNumber.encode(pub, wi)
+            assert enc.encoding > 0, (
+                f"Positive weight {wi} encoded as non-positive integer: {enc.encoding}"
+            )
+
+    # ── Q2: are 5755336 / 707022 what phe stores? ────────────────────────────
+
+    def test_claimed_integers_belong_to_raw_path_not_phe(self, keypair):
+        """
+        The claim cites '5755336' for 5.75533623 and '707022' for 0.70702177.
+
+        These are exactly round(w × 10^6) — the RAW arithmetic path's scale.
+        phe + Base10EncodedNumber uses float precision (~10^16), producing a
+        much larger integer.  This test documents both, proving the claim
+        is citing the wrong path.
+        """
+        pub, _ = keypair
+
+        cases = [
+            (5.75533623, 5755336),   # first diabetes weight
+            (0.70702177, 707022),    # third anemia weight (only positive one)
+        ]
+
+        for wi, claimed_int in cases:
+            # Raw path: round(wi × 10^6)
+            raw_int = round(wi * 1_000_000)
+            assert raw_int == claimed_int, (
+                f"Test setup error: raw_int={raw_int} != claimed {claimed_int}"
+            )
+
+            # phe + Base10: uses float precision, NOT 10^6
+            enc = Base10EncodedNumber.encode(pub, wi)
+            assert enc.encoding != claimed_int, (
+                f"wi={wi}: phe unexpectedly produced the 10^6-scale integer "
+                f"{claimed_int} — should use float precision"
+            )
+            # phe encoding must be much larger (higher precision)
+            assert abs(enc.encoding) > claimed_int * 1_000, (
+                f"wi={wi}: phe encoding {enc.encoding} is not higher-precision "
+                f"than the claimed raw-path integer {claimed_int}"
+            )
+            # But the float round-trip must be exact
+            assert math.isclose(enc.decode(), wi, rel_tol=1e-9), (
+                f"wi={wi}: phe round-trip failed — got {enc.decode()}"
+            )
+
+    # ── Q3: positive weight arithmetic correct? ───────────────────────────────
+
+    def test_positive_weight_arithmetic_roundtrip(self, keypair):
+        """
+        For every positive weight (all diabetes, one anemia):
+            js_encrypt(xi) * Base10(wi) decrypts to xi × wi within 1e-6.
+        Confirms the 'arithmetic is fine' part of the claim.
+        """
+        pub, priv = keypair
+        positive_pairs = [(0.5, w) for w in _DIABETES_WEIGHTS if w > 0]
+        positive_pairs += [(0.5, w) for w in _ANEMIA_WEIGHTS   if w > 0]
+
+        for xi, wi in positive_pairs:
+            js_c = js_style_encrypt(pub, xi)
+            enc  = paillier.EncryptedNumber(pub, int(js_c["ciphertext"]), js_c["exponent"])
+
+            result  = enc * Base10EncodedNumber.encode(pub, wi)
+            decoded = priv.decrypt_encoded(result, Encoding=Base10EncodedNumber).decode()
+            expected = xi * wi
+
+            assert math.isclose(decoded, expected, rel_tol=1e-6), (
+                f"Positive weight xi={xi}, wi={wi}: "
+                f"expected={expected:.8f}, got={decoded:.8f}"
+            )
+
+    # ── Q4: negative weight — negative or wrapped encoding? ──────────────────
+
+    def test_negative_weight_encoding_is_wrapped_not_negative(self, keypair):
+        """
+        For a negative weight like -13.92226671, what does phe store internally?
+
+        Test result (confirmed by failure of the original assumption):
+          phe wraps negative values as  n - abs_int  (a huge positive close to n),
+          NOT as a negative integer.
+
+        Consequence for performance:
+          _raw_mul receives a ~2048-bit positive exponent and calls
+              pow(ciphertext, n - abs_int, n²)
+          whereas a positive weight uses a ~57-bit exponent:
+              pow(ciphertext, 57553362300000000, n²)
+          Negative weights are therefore ~35× slower per multiplication.
+
+        Correctness is unaffected — E(m)^(n - k) = E(-k·m) holds in Paillier
+        (proved by the passing round-trip and inference tests).
+        """
+        pub, _ = keypair
+
+        for wi in [w for w in _ANEMIA_WEIGHTS + _HEART_WEIGHTS if w < 0]:
+            enc = Base10EncodedNumber.encode(pub, wi)
+
+            is_wrapped = enc.encoding > pub.n // 2   # huge positive close to n
+
+            # Float round-trip must be correct regardless of storage convention
+            assert math.isclose(enc.decode(), wi, rel_tol=1e-9), (
+                f"Negative weight {wi} round-trip failed: got {enc.decode()}"
+            )
+
+            # phe wraps negatives — encoding is a huge positive (close to n)
+            assert is_wrapped, (
+                f"wi={wi}: expected wrapped encoding (> n/2), "
+                f"got enc.encoding={enc.encoding}"
+            )
+
+            # Encoding must NOT be a small negative integer
+            assert enc.encoding > 0, (
+                f"wi={wi}: expected positive wrapped encoding, got {enc.encoding}"
+            )
+
+    # ── Q5: negative weight arithmetic correct? ───────────────────────────────
+
+    def test_negative_weight_arithmetic_roundtrip(self, keypair):
+        """
+        If the claim 'breaks for anemia' is correct, this test fails.
+        If Base10EncodedNumber handles negative weights correctly, it passes.
+
+        Tests every negative weight in the anemia and heart models:
+            js_encrypt(xi) * Base10(wi) decrypts to xi × wi  (negative result).
+        """
+        pub, priv = keypair
+        negative_pairs = [(0.5, w) for w in _ANEMIA_WEIGHTS + _HEART_WEIGHTS if w < 0]
+
+        for xi, wi in negative_pairs:
+            js_c = js_style_encrypt(pub, xi)
+            enc  = paillier.EncryptedNumber(pub, int(js_c["ciphertext"]), js_c["exponent"])
+
+            result  = enc * Base10EncodedNumber.encode(pub, wi)
+            decoded = priv.decrypt_encoded(result, Encoding=Base10EncodedNumber).decode()
+            expected = xi * wi  # negative
+
+            assert math.isclose(decoded, expected, rel_tol=1e-6), (
+                f"Negative weight xi={xi}, wi={wi}: "
+                f"expected={expected:.8f}, got={decoded:.8f}"
+            )
+
+    def test_anemia_full_inference_matches_plaintext(self, keypair):
+        """
+        End-to-end test: encrypted_linear_inference on the anemia model
+        (weights [-13.922, -0.194, +0.707, -0.741]) must match the plaintext
+        dot-product within 1e-4, across varied input vectors.
+
+        This is the definitive answer to 'does it break for anemia?'
+        """
+        pub, priv = keypair
+        w = TRAINED_WEIGHTS["anemia"]
+
+        test_vectors = [
+            [0.5,  0.5,  0.5,  0.5 ],   # uniform mid-range
+            [0.1,  0.9,  0.3,  0.7 ],   # varied
+            [0.0,  0.0,  0.0,  0.0 ],   # all-zero features
+            [1.0,  1.0,  1.0,  1.0 ],   # all-one features
+            [0.8,  0.2,  0.6,  0.4 ],   # asymmetric
+        ]
+
+        for x in test_vectors:
+            js_ciphers  = [js_style_encrypt(pub, xi) for xi in x]
+            enc_result  = encrypted_linear_inference(pub, js_ciphers, "anemia")
+            he_score    = decrypt_value(priv, enc_result)
+            plain_score = sum(wi * xi for wi, xi in zip(w["weights"], x)) + w["bias"]
+
+            assert abs(he_score - plain_score) < 1e-4, (
+                f"Anemia x={x}: HE={he_score:.6f}, plain={plain_score:.6f}, "
+                f"delta={abs(he_score - plain_score):.2e}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Run as script
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
