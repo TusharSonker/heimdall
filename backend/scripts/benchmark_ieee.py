@@ -4,11 +4,15 @@ Heimdall — IEEE Benchmark Suite
 Produces the performance tables required for the paper:
   • Table 1 : Key-generation latency by key size
   • Table 2 : Per-feature encryption and decryption latency
-  • Table 3 : Server-side HE inference latency per model
+  • Table 3 : Server-side HE inference latency per model (raw vs Base10)
   • Table 4 : End-to-end latency (keygen + encrypt + infer + decrypt)
   • Table 5 : Communication overhead (plaintext vs ciphertext bytes)
-  • Table 6 : Accuracy equivalence (encrypted == plaintext on test sets)
+  • Table 6 : Accuracy equivalence — JS-style ciphertexts → raw inference
+              (the actual production path) compared with plaintext logistic
+              regression
   • Table 7 : Quantisation error from integer scaling
+  • Table 8 : Interop trace — Base10 path vs raw path on JS-style ciphertexts.
+              Demonstrates the (16/10)^k error materialising on anemia.
 
 All latency measurements are repeated N=50 times; mean ± std and 95% CI
 are reported.  Run from the backend/ directory:
@@ -27,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import phe as paillier
 import numpy as np
 
+from core.encryption import Base10EncodedNumber
 from core.models import (
     TRAINED_WEIGHTS,
     MODEL_SPECS,
@@ -35,6 +40,21 @@ from core.models import (
     normalize_features,
     sigmoid,
 )
+
+
+# ---------------------------------------------------------------------------
+# JS-style encryption — what the browser actually sends
+# ---------------------------------------------------------------------------
+# Keep this in sync with frontend/src/utils/crypto.js encryptValue().
+# m = round(value * 10^6); c = (1 + m·n) · r^n  mod n²; exponent = -6.
+
+def js_style_encrypt(pub, value: float, scale: int = 1_000_000) -> dict:
+    n  = pub.n
+    n2 = n * n
+    m  = round(value * scale) % n
+    r  = random.randrange(1, n)
+    c  = (1 + m * n) * pow(r, n, n2) % n2
+    return {"ciphertext": str(c), "exponent": -int(math.log10(scale))}
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -145,28 +165,46 @@ def bench_enc_dec():
 # ---------------------------------------------------------------------------
 
 def bench_inference():
-    print("\n## Table 3: Server-Side HE Inference Latency\n")
+    """
+    Server-side HE inference latency, measured for *both* paths:
+      raw    — pow(c, k, n²); the deployed /api/predict path.
+      base10 — phe + Base10EncodedNumber; comparison endpoint.
+    """
+    print("\n## Table 3: Server-Side HE Inference Latency (raw vs Base10)\n")
     bits = 2048
-    pub, priv = paillier.generate_paillier_keypair(n_length=bits)
+    pub, _ = paillier.generate_paillier_keypair(n_length=bits)
     rows = []
     data_out = {}
     for mid in MODEL_IDS:
-        n_feat = len(MODEL_SPECS[mid]["features"])
-        dummy  = [0.5] * n_feat
-        enc_list = [pub.encrypt(v) for v in dummy]
-        enc_dicts = [{"ciphertext": str(e.ciphertext()), "exponent": e.exponent}
-                     for e in enc_list]
-        times = []
+        n_feat   = len(MODEL_SPECS[mid]["features"])
+        enc_dicts = [js_style_encrypt(pub, 0.5) for _ in range(n_feat)]
+
+        raw_times, b10_times = [], []
         for _ in range(N_RUNS):
             t = time.perf_counter()
+            encrypted_linear_inference_raw(pub, enc_dicts, mid)
+            raw_times.append((time.perf_counter() - t) * 1000)
+
+            t = time.perf_counter()
             encrypted_linear_inference(pub, enc_dicts, mid)
-            times.append((time.perf_counter() - t) * 1000)
-        m, med, s, lo, hi = ci95(times)
-        rows.append([mid, str(n_feat), fmt(m, med, s, lo, hi)])
-        data_out[mid] = dict(mean=m, median=med, std=s, ci95_lo=lo, ci95_hi=hi, n_features=n_feat)
-        print(f"  {mid:12s} ({n_feat} features): {fmt(m,med,s,lo,hi)}")
+            b10_times.append((time.perf_counter() - t) * 1000)
+
+        rm, rmed, rs, rlo, rhi = ci95(raw_times)
+        bm, bmed, bs, blo, bhi = ci95(b10_times)
+        rows.append([mid, str(n_feat),
+                     fmt(rm, rmed, rs, rlo, rhi),
+                     fmt(bm, bmed, bs, blo, bhi)])
+        data_out[mid] = dict(
+            n_features=n_feat,
+            raw=dict(mean=rm, median=rmed, std=rs, ci95_lo=rlo, ci95_hi=rhi),
+            base10=dict(mean=bm, median=bmed, std=bs, ci95_lo=blo, ci95_hi=bhi),
+        )
+        print(f"  {mid:12s} ({n_feat} feat) raw: {fmt(rm,rmed,rs,rlo,rhi)}")
+        print(f"  {mid:12s} ({n_feat} feat) b10: {fmt(bm,bmed,bs,blo,bhi)}")
     print()
-    print(md_table(["Model", "Features", f"HE Inference (2048-bit, ms, N={N_RUNS})"], rows))
+    print(md_table(["Model", "Features",
+                    f"Raw (ms, N={N_RUNS})",
+                    f"Base10 (ms, N={N_RUNS})"], rows))
     return data_out
 
 
@@ -175,6 +213,7 @@ def bench_inference():
 # ---------------------------------------------------------------------------
 
 def bench_e2e():
+    """End-to-end via the actual deployed path: JS-style encrypt + raw inference."""
     print("\n## Table 4: End-to-End Latency (keygen + encrypt + infer + decrypt)\n")
     rows = []
     data_out = {}
@@ -184,14 +223,12 @@ def bench_e2e():
         for _ in range(N_RUNS):
             t0 = time.perf_counter()
             pub, priv = paillier.generate_paillier_keypair(n_length=bits)
-            n_feat   = len(MODEL_SPECS[mid]["features"])
-            enc_list = [pub.encrypt(0.5) for _ in range(n_feat)]
-            enc_dicts = [{"ciphertext": str(e.ciphertext()), "exponent": e.exponent}
-                         for e in enc_list]
-            enc_res  = encrypted_linear_inference(pub, enc_dicts, mid)
-            enc_num  = paillier.EncryptedNumber(pub, int(enc_res["ciphertext"]),
-                                                enc_res["exponent"])
-            priv.decrypt(enc_num)
+            n_feat    = len(MODEL_SPECS[mid]["features"])
+            enc_dicts = [js_style_encrypt(pub, 0.5) for _ in range(n_feat)]
+            enc_res   = encrypted_linear_inference_raw(pub, enc_dicts, mid)
+            # Client-side: decrypt as integer, divide by 10^12
+            enc_num = paillier.EncryptedNumber(pub, int(enc_res["ciphertext"]), 0)
+            _ = priv.decrypt(enc_num) / 10**12
             times.append((time.perf_counter() - t0) * 1000)
         m, med, s, lo, hi = ci95(times)
         rows.append([f"{bits}-bit", fmt(m, med, s, lo, hi)])
@@ -242,8 +279,10 @@ def bench_communication():
 
 def bench_accuracy_equivalence():
     """
-    Verify that encrypted inference produces IDENTICAL decisions to plaintext
-    logistic regression across a sweep of synthetic feature vectors.
+    Verify that the *production* path (JS-style ciphertexts → raw Paillier
+    inference → BigInt decrypt → divide by 10^12) produces IDENTICAL
+    decisions to plaintext logistic regression. This mirrors what the
+    deployed system does end-to-end.
     """
     print("\n## Table 6: Encrypted vs Plaintext Accuracy Equivalence\n")
     bits = 2048
@@ -252,34 +291,26 @@ def bench_accuracy_equivalence():
     rows   = []
     data_out = {}
     for mid in MODEL_IDS:
-        w      = TRAINED_WEIGHTS[mid]
+        w       = TRAINED_WEIGHTS[mid]
         weights = np.array(w["weights"])
         bias    = w["bias"]
         thresh  = w.get("threshold", 0.5)
         n_feat  = len(weights)
 
-        mismatches = 0
+        mismatches  = 0
         score_diffs = []
 
         for _ in range(N_TEST):
-            # Random normalised feature vector
             x = np.random.uniform(0.0, 1.0, n_feat)
 
-            # Plaintext prediction
             plain_score = float(np.dot(weights, x) + bias)
-            plain_prob  = sigmoid(plain_score)
-            plain_risk  = plain_prob > thresh
+            plain_risk  = sigmoid(plain_score) > thresh
 
-            # Encrypted prediction
-            enc_list  = [pub.encrypt(float(xi)) for xi in x]
-            enc_dicts = [{"ciphertext": str(e.ciphertext()), "exponent": e.exponent}
-                         for e in enc_list]
-            enc_res   = encrypted_linear_inference(pub, enc_dicts, mid)
-            enc_num   = paillier.EncryptedNumber(pub, int(enc_res["ciphertext"]),
-                                                 enc_res["exponent"])
-            enc_score = priv.decrypt(enc_num)
-            enc_prob  = sigmoid(enc_score)
-            enc_risk  = enc_prob > thresh
+            enc_dicts = [js_style_encrypt(pub, float(xi)) for xi in x]
+            enc_res   = encrypted_linear_inference_raw(pub, enc_dicts, mid)
+            enc_num   = paillier.EncryptedNumber(pub, int(enc_res["ciphertext"]), 0)
+            enc_score = priv.decrypt(enc_num) / 10**12
+            enc_risk  = sigmoid(enc_score) > thresh
 
             score_diffs.append(abs(enc_score - plain_score))
             if enc_risk != plain_risk:
@@ -350,6 +381,88 @@ def bench_quantisation():
 
 
 # ---------------------------------------------------------------------------
+# Table 8 — Interop trace (Base10 vs raw on JS-style ciphertexts)
+# ---------------------------------------------------------------------------
+
+def bench_interop_trace():
+    """
+    The §V worked example. Encrypts JS-style ciphertexts (the ones the browser
+    actually sends) and runs them through *both* server-side paths:
+
+      Base10  — wraps each ciphertext in phe.EncryptedNumber and uses
+                Base10EncodedNumber for the weights. Internally, when phe needs
+                to align two EncryptedNumbers with different product-exponents,
+                it calls EncryptedNumber.decrease_exponent_to which hardcodes
+                EncodedNumber.BASE = 16 (not the subclass's BASE = 10),
+                introducing a (16/10)^k factor per alignment step.
+      Raw     — bypasses phe encoding entirely via pow(c, k, n²).
+
+    For each model we report mean |Δscore| from plaintext and the worst-case
+    multiplicative error of the Base10 path. The Base10 path is correct only
+    when all weight·feature products land at the same exponent (no alignment
+    triggered). Anemia trips the bug because w₀ ≈ -13.92 encodes at a
+    different exponent than the other weights.
+    """
+    print("\n## Table 8: Interop Trace — Base10 vs Raw on JS-style ciphertexts\n")
+    bits = 1024
+    pub, priv = paillier.generate_paillier_keypair(n_length=bits)
+    N_TEST = 50
+    rows   = []
+    data_out = {}
+
+    for mid in MODEL_IDS:
+        w       = TRAINED_WEIGHTS[mid]
+        weights = np.array(w["weights"])
+        bias    = w["bias"]
+        n_feat  = len(weights)
+
+        b10_errors, raw_errors = [], []
+        for _ in range(N_TEST):
+            x = np.random.uniform(0.0, 1.0, n_feat)
+            enc_dicts = [js_style_encrypt(pub, float(xi)) for xi in x]
+
+            plain_score = float(np.dot(weights, x) + bias)
+
+            # Base10 path
+            r1 = encrypted_linear_inference(pub, enc_dicts, mid)
+            enc1 = paillier.EncryptedNumber(pub, int(r1["ciphertext"]), r1["exponent"])
+            score_b10 = priv.decrypt_encoded(enc1, Encoding=Base10EncodedNumber).decode()
+
+            # Raw path
+            r2 = encrypted_linear_inference_raw(pub, enc_dicts, mid)
+            score_raw = priv.decrypt(paillier.EncryptedNumber(pub, int(r2["ciphertext"]), 0)) / 10**12
+
+            b10_errors.append(abs(score_b10 - plain_score))
+            raw_errors.append(abs(score_raw - plain_score))
+
+        b10_mean = statistics.mean(b10_errors)
+        b10_max  = max(b10_errors)
+        raw_mean = statistics.mean(raw_errors)
+        raw_max  = max(raw_errors)
+        verdict  = "OK" if b10_max < 1e-3 else f"BROKEN (≈ {b10_max:.2e})"
+
+        rows.append([mid, str(n_feat),
+                     f"{raw_mean:.2e}", f"{raw_max:.2e}",
+                     f"{b10_mean:.2e}", f"{b10_max:.2e}", verdict])
+        data_out[mid] = dict(
+            n_features=n_feat,
+            raw_mean=raw_mean, raw_max=raw_max,
+            base10_mean=b10_mean, base10_max=b10_max,
+            base10_verdict=verdict,
+        )
+    print(md_table(
+        ["Model", "Features",
+         "Raw mean |Δs|", "Raw max |Δs|",
+         "Base10 mean |Δs|", "Base10 max |Δs|", "Base10 verdict"],
+        rows
+    ))
+    print("\n*Base10 path fails on anemia because its weight magnitudes span more*")
+    print("*than one order of magnitude, triggering EncryptedNumber alignment with*")
+    print("*hardcoded BASE=16. The raw path is the version-independent fix.*")
+    return data_out
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -367,6 +480,7 @@ def main():
     results["communication"] = bench_communication()
     results["equivalence"]   = bench_accuracy_equivalence()
     results["quantisation"]  = bench_quantisation()
+    results["interop_trace"] = bench_interop_trace()
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = RESULTS_DIR / "benchmark_results.json"
