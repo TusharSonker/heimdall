@@ -176,6 +176,7 @@ export default function DiagnosisPage() {
         risk,
         probability,
         score,
+        threshold:         serverResp.threshold,
         modelLabel:        currentModel.label,
         encryptedResult:   serverResp.encrypted_result,
         inferenceTimeMs:   serverResp.inference_time_ms,
@@ -252,7 +253,12 @@ export default function DiagnosisPage() {
             }}
           >
             {m.label}
-            <span className={styles.tabAcc}>{m.accuracy}%</span>
+            <span
+              className={styles.tabAcc}
+              title={`Model test-set accuracy on held-out data — not the patient's risk score.`}
+            >
+              ACC {m.accuracy}%
+            </span>
           </button>
         ))}
         {Object.keys(models).length === 0 && (

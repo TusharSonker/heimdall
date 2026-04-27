@@ -4,8 +4,9 @@ import styles from './ResultPanel.module.css';
 export default function ResultPanel({ result }) {
   if (!result) return null;
 
-  const { risk, probability, score, modelLabel, encryptedResult, inferenceTimeMs } = result;
+  const { risk, probability, score, threshold, modelLabel, encryptedResult, inferenceTimeMs } = result;
   const isHigh = risk === 'HIGH';
+  const thresholdPct = (threshold ?? 0.5) * 100;
 
   return (
     <div className={[styles.panel, isHigh ? styles.high : styles.low].join(' ')}>
@@ -13,7 +14,7 @@ export default function ResultPanel({ result }) {
       <div className={styles.riskValue}>{risk} RISK</div>
       <div className={styles.prob}>
         P(disease) = {(probability * 100).toFixed(2)}%
-        &nbsp;·&nbsp; Decision boundary: 50%
+        &nbsp;·&nbsp; Decision boundary: {thresholdPct.toFixed(1)}%
         &nbsp;·&nbsp; Raw score: {score.toFixed(4)}
       </div>
 
