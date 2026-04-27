@@ -31,11 +31,12 @@ _WEIGHTS_FILE = Path(__file__).parent / "trained_weights.json"
 # ── Fallback weights (from the project report) ─────────────────────────────
 _FALLBACK_WEIGHTS = {
     "diabetes": {
-        "weights":       [0.035, 0.028, 0.015, 0.012],
+        "weights":       [0.10, 0.04, 0.01, 0.01, 0.005, 0.05, 0.8, 0.02],
         "bias":          -4.5,
-        "feature_names": ["glucose", "bmi", "age", "bp"],
-        "feature_mins":  [0,   10,  1,  40],
-        "feature_maxs":  [300, 60, 120, 200],
+        "feature_names": ["Pregnancies", "Glucose", "BloodPressure", "SkinThickness",
+                          "Insulin", "BMI", "DiabetesPedigreeFunction", "Age"],
+        "feature_mins":  [0,  0,   40,  0,   0,   10, 0.0, 1],
+        "feature_maxs":  [17, 300, 200, 100, 900, 60, 2.5, 120],
     },
     "heart": {
         "weights":       [0.02, 0.003, 0.015, 0.4],
@@ -60,10 +61,14 @@ MODEL_SPECS = {
         "label":    "Diabetes",
         "accuracy": 77.3,
         "features": [
-            {"id": "glucose", "label": "Glucose (mg/dL)",      "min": 0,   "max": 300, "hint": "Normal: 70-100"},
-            {"id": "bmi",     "label": "BMI",                   "min": 10,  "max": 60,  "hint": "Normal: 18.5-24.9"},
-            {"id": "age",     "label": "Age (years)",            "min": 1,   "max": 120, "hint": ""},
-            {"id": "bp",      "label": "Blood Pressure (mmHg)", "min": 40,  "max": 200, "hint": "Normal diastolic: 60-80"},
+            {"id": "pregnancies", "label": "Pregnancies",                "min": 0,   "max": 17,  "hint": "Number of times pregnant"},
+            {"id": "glucose",     "label": "Glucose (mg/dL)",            "min": 0,   "max": 300, "hint": "Normal: 70-100 (fasting)"},
+            {"id": "bp",          "label": "Blood Pressure (mmHg)",      "min": 40,  "max": 200, "hint": "Diastolic, normal: 60-80"},
+            {"id": "skin",        "label": "Skin Thickness (mm)",        "min": 0,   "max": 100, "hint": "Triceps skin fold"},
+            {"id": "insulin",     "label": "Insulin (μU/mL)",            "min": 0,   "max": 900, "hint": "2-hr serum, normal: 16-166"},
+            {"id": "bmi",         "label": "BMI",                        "min": 10,  "max": 60,  "hint": "Normal: 18.5-24.9"},
+            {"id": "dpf",         "label": "Diabetes Pedigree Function", "min": 0,   "max": 2.5, "hint": "Family-history score"},
+            {"id": "age",         "label": "Age (years)",                "min": 1,   "max": 120, "hint": ""},
         ],
     },
     "heart": {

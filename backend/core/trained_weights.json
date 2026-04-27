@@ -1,39 +1,55 @@
 {
   "diabetes": {
     "weights": [
-      5.75533623,
-      3.37774489,
-      2.25690634,
-      0.76301865
+      1.4646268,
+      5.43452245,
+      0.64907364,
+      0.90653412,
+      1.0942019,
+      3.07378846,
+      1.40543207,
+      1.41941199
     ],
-    "bias": -4.77068599,
-    "threshold": 0.4346,
+    "bias": -5.30298303,
+    "threshold": 0.3711,
     "feature_names": [
+      "Pregnancies",
       "Glucose",
+      "BloodPressure",
+      "SkinThickness",
+      "Insulin",
       "BMI",
-      "Age",
-      "BloodPressure"
+      "DiabetesPedigreeFunction",
+      "Age"
     ],
     "feature_mins": [
       0,
+      0,
+      40,
+      0,
+      0,
       10,
-      1,
-      40
+      0.0,
+      1
     ],
     "feature_maxs": [
+      17,
       300,
+      200,
+      100,
+      900,
       60,
-      120,
-      200
+      2.5,
+      120
     ],
     "metrics": {
-      "accuracy": 0.6883,
-      "precision": 0.5455,
+      "accuracy": 0.6948,
+      "precision": 0.5538,
       "recall": 0.6667,
-      "f1": 0.6,
-      "auc": 0.7798,
-      "cv_mean": 0.7253,
-      "cv_std": 0.0339,
+      "f1": 0.605,
+      "auc": 0.8031,
+      "cv_mean": 0.7488,
+      "cv_std": 0.0378,
       "n_samples": 768
     }
   },

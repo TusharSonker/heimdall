@@ -46,12 +46,10 @@ def train_diabetes():
     Dataset: Pima Indians Diabetes (UCI)
     768 samples, 8 features, binary outcome (0=no diabetes, 1=diabetes)
 
-    We use only 4 features to keep the linear model interpretable
-    and consistent with the Heimdall UI:
-      - Glucose
-      - BMI
-      - Age
-      - BloodPressure (diastolic)
+    Uses all 8 native Pima features for full clinical fidelity:
+      Pregnancies, Glucose, BloodPressure (diastolic),
+      SkinThickness (triceps), Insulin (2-hr serum), BMI,
+      DiabetesPedigreeFunction, Age.
     """
     path = os.path.join(DATA_DIR, 'diabetes.csv')
     _check_file(path, 'diabetes')
@@ -60,23 +58,20 @@ def train_diabetes():
             'Insulin','BMI','DiabetesPedigreeFunction','Age','Outcome']
     df = pd.read_csv(path, header=None, names=cols)
 
-    # The dataset uses 0 to encode missing values for physiological
-    # measurements — replace with column median
-    # for col in ['Glucose','BloodPressure','BMI','Age']:
-    #     df[col] = df[col].replace(0, np.nan)
-    #     df[col].fillna(df[col].median(), inplace=True)
-    for col in ['Glucose', 'BloodPressure', 'BMI', 'Age']:
+    # 0 in physiological columns encodes missing — replace with column median
+    for col in ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']:
         df[col] = df[col].replace(0, np.nan)
         df[col] = df[col].fillna(df[col].median())
 
-    # Select the 4 features that match the Heimdall UI fields
-    features = ['Glucose', 'BMI', 'Age', 'BloodPressure']
+    features = ['Pregnancies', 'Glucose', 'BloodPressure', 'SkinThickness',
+                'Insulin', 'BMI', 'DiabetesPedigreeFunction', 'Age']
     X = df[features].values
     y = df['Outcome'].values
 
     return _fit_and_report('diabetes', features, X, y,
-                           feature_mins=[0,   10,  1,  40],
-                           feature_maxs=[300, 60, 120, 200])
+        feature_mins=[0,   0,   40,  0,   0,   10,  0.0, 1],
+        feature_maxs=[17,  300, 200, 100, 900, 60,  2.5, 120],
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -283,7 +278,7 @@ def _check_file(path, name):
     if not os.path.exists(path):
         print(f"\n  [ERROR] {name} dataset not found at: {path}")
         print(f"          Run: python scripts/download_data.py first.")
-        sys.exit(1)
+        raise SystemExit(1)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -294,9 +289,15 @@ def main():
     print("Heimdall — Model Training Pipeline")
     print("=" * 60)
 
+    # Start from existing weights so models with missing datasets keep
+    # the last successful training (avoids wiping anemia when its CSV
+    # mirror is unreachable, etc.)
     results = {}
+    if os.path.exists(OUT_FILE):
+        with open(OUT_FILE) as f:
+            results = json.load(f)
+        print(f"Loaded existing weights for: {list(results.keys())}")
 
-    # Train each model (skip gracefully if data is missing)
     trainers = [
         ('diabetes', train_diabetes),
         ('heart',    train_heart),
@@ -307,7 +308,7 @@ def main():
         try:
             results[model_id] = fn()
         except SystemExit:
-            print(f"  Skipping {model_id} — data file missing.")
+            print(f"  Skipping {model_id} — data file missing (preserving existing weights if any).")
         except Exception as e:
             print(f"\n  [ERROR] Training {model_id} failed: {e}")
             import traceback; traceback.print_exc()
