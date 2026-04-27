@@ -74,11 +74,11 @@ heimdall/
 
 ## Medical Models
 
-| Model         | Features                                   | Accuracy |
-|---------------|--------------------------------------------|----------|
-| Diabetes      | Glucose, BMI, Age, Blood Pressure          | 77.3%    |
-| Heart Disease | Age, Cholesterol, Systolic BP, Smoking     | 83.6%    |
-| Anemia        | Hemoglobin, RBC count, MCV, MCH            | 89.4%    |
+| Model         | Features                                                                  | Accuracy |
+|---------------|---------------------------------------------------------------------------|----------|
+| Diabetes      | Pregnancies, Glucose, BP, Skin Thickness, Insulin, BMI, DPF, Age (8)     | 69.5%    |
+| Heart Disease | Age, Max HR, Resting SBP, Chest Pain Type (4)                            | 85.0%    |
+| Anemia        | Hemoglobin, MCH, MCHC, MCV (4)                                           | 91.2%    |
 
 All models use **linear classifiers** — the only type compatible with additive HE without approximation tricks.
 
