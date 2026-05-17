@@ -1,9 +1,6 @@
 # Heimdall
 ### Privacy-Preserving Medical Diagnosis via Paillier Homomorphic Encryption
 
-> **Delhi Technological University — Minor Project**
-> Tushar Sonker · Shivansh Rajdehl · Shivam Singh
-> Supervised by Prof. Jamkhongam Touthang · 2025–2026
 
 ---
 
